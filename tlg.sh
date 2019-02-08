@@ -49,6 +49,10 @@ log_cmd() {
     if [ "$tmplog" -nt "$cmp" ]; then
         if [ -s "$tmplog" ]; then
             if cp "$tmplog" "$logfile"; then
+                if [ "$TLG_GIT" = "true" ]; then
+                    git add "$logfile"
+                    git commit "$logfile" -m "log time"
+                fi
                 echo "log saved to $logfile"
             else
                 echo "failed to save log"
