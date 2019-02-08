@@ -9,48 +9,55 @@ die() {
 }
 
 TIMEFMT="%H%M"
-TZ=$(date +"%Z")
-TIME_REGEX="[0-2][0-9][0-5][0-9]"
+DATE_REGEX="^([0-9]{4})-(1[0-2]|0[1-9])-(3[01]|0[1-9]|[12][0-9])$"
+DAY_REGEX=""
 TMPDIR="$(mktemp -d)"
 
 log_cmd() {
-    dir="$1"
-    [ -z "$dir" ] && exit 1
-    shift
+    [ -z "$1" ] && die "no directory or log specified"
+    if [ -d "$1" ]; then
+        logfile="$1/$(date +"%Y-%m-%d")"
+    elif echo "$(basename $1)" | grep -qE "$DATE_REGEX"; then
+        logfile="$1"
+    else
+        die "invalid dir or log -- %s" "$1"
+    fi
 
-    # determing start and end times
-    duration=${1:-120}
-    file="$dir"/"$(date +"%F")"
-    unix=$(date +"%s")
-    halfhours=$(((unix+60*15) / (60*30)))
-    start=$(date -d "@$(((halfhours*30-duration)*60))" +"$TIMEFMT")
-    end=$(date -d "@$((halfhours*30*60))" +"$TIMEFMT")
+    shift
+    [ -n "$1" ] && die "excess arguments -- $*"
 
     # create temporary file
-    log="$TMPDIR/log"
-    cmp="$TMPDIR/cmp"
-    if [ -r "$file" ]; then
-        cat "$file" > "$log"
-        echo >> "$log"
+    tmplog="$TMPDIR/log"
+    if [ -r "$logfile" ]; then
+        cat "$logfile" > "$tmplog"
+    else
+        duration=${1:-120}
+        unix=$(date +"%s")
+        halfhours=$(((unix+60*15) / (60*30)))
+        start=$(date -d "@$(((halfhours*30-duration)*60))" +"$TIMEFMT")
+        end=$(date -d "@$((halfhours*30*60))" +"$TIMEFMT")
+
+        echo "$start $end" >> "$tmplog"
     fi
-    echo "$start $end" >> "$log"
-    touch "$log" -d "1970-01-01T00:00:00"
-    touch "$cmp" -d "1970-01-01T00:00:00"
 
     # edit log
-    $EDITOR "$log"
+    $EDITOR "$tmplog"
 
     # write log to log dir
-    if [ "$log" -nt "$cmp" ]; then
-        if [ -s "$log" ]; then
-            cp "$log" "$file"
-            echo "log saved to $file"
+    if [ -e $logfile ] && diff "$logfile" "$tmplog"; then
+        echo "log not modified"
+    else
+        if [ -s "$tmplog" ]; then
+            if cp "$tmplog" "$logfile"; then 
+                echo "log saved to $logfile"
+            else
+                echo "failed to save log"
+                cat $tmplog
+            fi
         else
-            rm -f "$file"
+            rm -f "$logfile"
             echo "log empty, removed existing (if any)"
         fi
-    else
-        echo "log not written, aborting"
     fi
 }
 
@@ -88,9 +95,9 @@ review_cmd() {
     done
     shift $(($OPTIND-1))
 
-    [ -z "$1" ] && exit 1
+    [ -z "$1" ] && die "no directory or log files specified"
 
-    if [ -d "$1" ];
+    if [ -z "$2" -a -d "$1" ];
     then day_files="$1/*"
     else day_files="$@"
     fi
@@ -101,7 +108,10 @@ review_cmd() {
 
     # format to entries per day per week, and per activity
     for dayfile in $day_files; do
+        [ -r "$dayfile" ] || die "cannot open log file -- %s" "$dayfile"
         day=$(basename $dayfile)
+        echo $day | grep -qE "$DATE_REGEX" \
+            || die "invalid filename, must be of type YYYY-MM-DD -- %s" "$day"
         week=$(date -d"$day" +"%V")
         mkdir -p "$TMPDIR/weeks/$week"
         grep -e "^$TIME_REGEX $TIME_REGEX" "$dayfile" |\
@@ -110,15 +120,15 @@ review_cmd() {
             duration="$(duration $start $end)"
 
             actfile="$TMPDIR/activities/$activity"
-            if [ -e "$actfile" ]; then
-                current="$(cat $actfile)"
-                echo "$((current+duration))" > "$actfile"
-            else
-                echo "$duration" > "$actfile"
+            if [ -e "$actfile" ];
+            then act_duration="$(($(cat $actfile)+duration))"
+            else act_duration="$duration"
             fi
 
-            printf "$day\t$start\t$end\t$duration\t$activity\n"
-        done > "$TMPDIR/weeks/$week/$day"
+            echo "$act_duration" > "$actfile"
+            printf "$day\t$start\t$end\t$duration\t$activity\n" \
+                >> "$TMPDIR/weeks/$week/$day"
+        done
     done
 
     minutes_total=0
@@ -133,8 +143,11 @@ review_cmd() {
                 minutes_day=$((minutes_day+duration))
 
                 if [ "$summary" = "true" ];then
-                    printf "%s\t%s\t%s-%s\t%s\n" "$date" \
-                           "$duration" "$start" "$end" "$activity"
+                    startstr=$(date -d"$start" +"%H:%M")
+                    endstr=$(date -d"$end" +"%H:%M")
+                    hours=$(echo "scale=2; $duration/60" | bc)
+                    printf "%s\t%s\t%s\t%s\t%s\n" "$date" \
+                           "$startstr" "$endstr" "$hours" "$activity"
                 fi
             done < "$dayfile"
             minutes_week=$((minutes_week+minutes_day))
@@ -162,7 +175,6 @@ review_cmd() {
     fi
 
     printf "Total: %s\n" "$(duration_fmt "$minutes_total")"
-
 }
 
 command="$1"
