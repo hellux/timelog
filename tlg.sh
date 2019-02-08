@@ -22,42 +22,44 @@ log_cmd() {
     else
         die "invalid dir or log -- %s" "$1"
     fi
-
     shift
-    [ -n "$1" ] && die "excess arguments -- $*"
+    duration=${1:-120}
 
     # create temporary file
     tmplog="$TMPDIR/log"
+    cmp="$TMPDIR/cmp"
     if [ -r "$logfile" ]; then
         cat "$logfile" > "$tmplog"
     else
-        duration=${1:-120}
         unix=$(date +"%s")
         halfhours=$(((unix+60*15) / (60*30)))
         start=$(date -d "@$(((halfhours*30-duration)*60))" +"$TIMEFMT")
         end=$(date -d "@$((halfhours*30*60))" +"$TIMEFMT")
 
-        echo "$start $end" >> "$tmplog"
+        echo "$start $end" > "$tmplog"
     fi
+    EPOCH="1970-01-01T00:00:00"
+    touch -d "$EPOCH" "$tmplog"
+    touch -d "$EPOCH" "$cmp"
 
-    # edit log
+    # let user edit log
     $EDITOR "$tmplog"
 
     # write log to log dir
-    if [ -e $logfile ] && diff "$logfile" "$tmplog"; then
-        echo "log not modified"
-    else
+    if [ "$tmplog" -nt "$cmp" ]; then
         if [ -s "$tmplog" ]; then
-            if cp "$tmplog" "$logfile"; then 
+            if cp "$tmplog" "$logfile"; then
                 echo "log saved to $logfile"
             else
                 echo "failed to save log"
-                cat $tmplog
+                cat "$tmplog"
             fi
         else
             rm -f "$logfile"
             echo "log empty, removed existing (if any)"
         fi
+    else
+        echo "log not modified, no writing needed"
     fi
 }
 
