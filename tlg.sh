@@ -8,48 +8,61 @@ die() {
 }
 
 TIMEFMT="%H%M"
-TZ=$(date +"%Z")
+DATE_REGEX="^([0-9]{4})-(1[0-2]|0[1-9])-(3[01]|0[1-9]|[12][0-9])$"
 TIME_REGEX="[0-2][0-9][0-5][0-9]"
 TMPDIR="$(mktemp -d)"
 
 log_cmd() {
-    dir="$1"
-    [ -z "$dir" ] && exit 1
+    [ -z "$1" ] && die "no directory or log specified"
+    if [ -d "$1" ]; then
+        logfile="$1/$(date +"%Y-%m-%d")"
+    elif echo "$(basename $1)" | grep -qE "$DATE_REGEX"; then
+        logfile="$1"
+    else
+        die "invalid dir or log -- %s" "$1"
+    fi
     shift
-
-    # determing start and end times
     duration=${1:-120}
-    file="$dir"/"$(date +"%F")"
-    unix=$(date +"%s")
-    halfhours=$(((unix+60*15) / (60*30)))
-    start=$(date -d "@$(((halfhours*30-duration)*60))" +"$TIMEFMT")
-    end=$(date -d "@$((halfhours*30*60))" +"$TIMEFMT")
 
     # create temporary file
-    log="$TMPDIR/log"
+    tmplog="$TMPDIR/log"
     cmp="$TMPDIR/cmp"
-    if [ -r "$file" ]; then
-        cat "$file" > "$log"
-        echo >> "$log"
-    fi
-    echo "$start $end" >> "$log"
-    touch "$log" -d "1970-01-01T00:00:00"
-    touch "$cmp" -d "1970-01-01T00:00:00"
+    if [ -r "$logfile" ]; then
+        cat "$logfile" > "$tmplog"
+    else
+        unix=$(date +"%s")
+        halfhours=$(((unix+60*15) / (60*30)))
+        start=$(date -d "@$(((halfhours*30-duration)*60))" +"$TIMEFMT")
+        end=$(date -d "@$((halfhours*30*60))" +"$TIMEFMT")
 
-    # edit log
-    $EDITOR "$log"
+        echo "$start $end" > "$tmplog"
+    fi
+    EPOCH="1970-01-01T00:00:00"
+    touch -d "$EPOCH" "$tmplog"
+    touch -d "$EPOCH" "$cmp"
+
+    # let user edit log
+    $EDITOR "$tmplog"
 
     # write log to log dir
-    if [ "$log" -nt "$cmp" ]; then
-        if [ -s "$log" ]; then
-            cp "$log" "$file"
-            echo "log saved to $file"
+    if [ "$tmplog" -nt "$cmp" ]; then
+        if [ -s "$tmplog" ]; then
+            if cp "$tmplog" "$logfile"; then
+                if [ "$TLG_GIT" = "true" ]; then
+                    git add "$logfile"
+                    git commit "$logfile" -m "log time"
+                fi
+                echo "log saved to $logfile"
+            else
+                echo "failed to save log"
+                cat "$tmplog"
+            fi
         else
-            rm -f "$file"
+            rm -f "$logfile"
             echo "log empty, removed existing (if any)"
         fi
     else
-        echo "log not written, aborting"
+        echo "log not modified, no writing needed"
     fi
 }
 
@@ -88,9 +101,9 @@ review_cmd() {
     done
     shift $((OPTIND-1))
 
-    [ -z "$1" ] && exit 1
+    [ -z "$1" ] && die "no directory or log files specified"
 
-    if [ -d "$1" ];
+    if [ -z "$2" -a -d "$1" ];
     then day_files="$1/*"
     else day_files="$*"
     fi
@@ -102,24 +115,28 @@ review_cmd() {
     # format to entries per day per week, and per activity
     for dayfile in $day_files; do
         day="$(basename "$dayfile")"
+        [ -r "$dayfile" ] || die "cannot open log file -- %s" "$dayfile"
+        echo $day | grep -qE "$DATE_REGEX" \
+            || die "invalid filename, must be of type YYYY-MM-DD -- %s" "$day"
         week="$(date -d"$day" +"%V")"
         mkdir -p "$TMPDIR/weeks/$week"
+
         grep -e "^$TIME_REGEX $TIME_REGEX" "$dayfile" |\
-        sed 's/ /\t/;s/ /\t/' |\
-        while read -r start end activity; do
-            duration="$(duration "$start" "$end")"
+            sed 's/ /\t/;s/ /\t/' |\
+            while read -r start end activity; do
+                duration="$(duration "$start" "$end")"
 
-            actfile="$TMPDIR/activities/$activity"
-            if [ -e "$actfile" ]; then
-                current="$(cat "$actfile")"
-                echo "$((current+duration))" > "$actfile"
-            else
-                echo "$duration" > "$actfile"
-            fi
+                actfile="$TMPDIR/activities/$activity"
+                if [ -e "$actfile" ]; then
+                    current="$(cat "$actfile")"
+                    echo "$((current+duration))" > "$actfile"
+                else
+                    echo "$duration" > "$actfile"
+                fi
 
-            printf "%s\t%s\t%s\t%s\t%s\n" "$day" "$start" "$end" \
-                                          "$duration" "$activity"
-        done > "$TMPDIR/weeks/$week/$day"
+                printf "%s\t%s\t%s\t%s\t%s\n" "$day" "$start" "$end" \
+                                              "$duration" "$activity"
+            done > "$TMPDIR/weeks/$week/$day"
     done
 
     minutes_total=0
@@ -134,8 +151,11 @@ review_cmd() {
                 minutes_day=$((minutes_day+duration))
 
                 if [ "$summary" = "true" ];then
-                    printf "%s\t%s\t%s-%s\t%s\n" "$date" \
-                           "$duration" "$start" "$end" "$activity"
+                    startstr=$(date -d"$start" +"%H:%M")
+                    endstr=$(date -d"$end" +"%H:%M")
+                    hours=$(echo "scale=2; $duration/60" | bc)
+                    printf "%s\t%s\t%s\t%s\t%s\n" "$date" \
+                           "$startstr" "$endstr" "$hours" "$activity"
                 fi
             done < "$dayfile"
             minutes_week=$((minutes_week+minutes_day))
@@ -163,7 +183,6 @@ review_cmd() {
     fi
 
     printf "Total: %s\n" "$(duration_fmt "$minutes_total")"
-
 }
 
 command="$1"
@@ -176,4 +195,4 @@ case "$command" in
     *) die 'invalid command -- %s\n\n%s' "$command" "$USAGE";;
 esac
 
-rm -rf "$TMPDIR"
+#rm -rf "$TMPDIR"
