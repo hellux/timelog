@@ -170,7 +170,17 @@ review_cmd() {
             while read -r day start end duration activity partic topics; do
                 minutes_day=$((minutes_day+duration))
 
-                if [ "$summary" = "true" ];then
+                if [ "$activities" = "true" ]; then
+                    actfile="$TMPDIR/activities/$activity"
+                    if [ -e "$actfile" ]; then
+                        current=$(cat "$actfile")
+                        echo $((current+duration)) > "$actfile"
+                    else
+                        echo "$duration" > "$actfile"
+                    fi
+                fi
+
+                if [ "$summary" = "true" ]; then
                     startstr=$(date -d"$start" +"%H:%M")
                     endstr=$(date -d"$end" +"%H:%M")
                     hours=$(echo "scale=2; $duration/60" | bc)
