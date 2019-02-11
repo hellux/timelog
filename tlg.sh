@@ -1,9 +1,8 @@
 #!/bin/sh
 
 die() {
-    str=$1
     [ -n "$2" ]; shift
-    printf 'error: '"$str"'\n' "$@" 1>&2
+    printf 'error: '"$1"'\n' "$@" 1>&2
     rm -rf "$RNT_DIR"
     exit 1
 }
@@ -60,7 +59,7 @@ duration_fmt() {
     then minstr="$(($1 % 60))m"
     else minstr=""
     fi
-    printf "$hourstr $minstr"
+    printf "%s %s" "$hourstr" "$minstr"
 }
 
 duration() {
@@ -84,15 +83,16 @@ review_cmd() {
         w) weekly="true";;
         s) summary="true";;
         a) activities="true";;
+        [?]) die "invalid flag -- %s" "$OPTARG"
         esac
     done
-    shift $(($OPTIND-1))
+    shift $((OPTIND-1))
 
     [ -z "$1" ] && exit 1
 
     if [ -d "$1" ];
     then day_files="$1/*"
-    else day_files="$@"
+    else day_files="$*"
     fi
 
     mkdir -p "$TMPDIR/weeks"
@@ -101,32 +101,33 @@ review_cmd() {
 
     # format to entries per day per week, and per activity
     for dayfile in $day_files; do
-        day=$(basename $dayfile)
-        week=$(date -d"$day" +"%V")
+        day="$(basename "$dayfile")"
+        week="$(date -d"$day" +"%V")"
         mkdir -p "$TMPDIR/weeks/$week"
         grep -e "^$TIME_REGEX $TIME_REGEX" "$dayfile" |\
         sed 's/ /\t/;s/ /\t/' |\
         while read -r start end activity; do
-            duration="$(duration $start $end)"
+            duration="$(duration "$start" "$end")"
 
             actfile="$TMPDIR/activities/$activity"
             if [ -e "$actfile" ]; then
-                current="$(cat $actfile)"
+                current="$(cat "$actfile")"
                 echo "$((current+duration))" > "$actfile"
             else
                 echo "$duration" > "$actfile"
             fi
 
-            printf "$day\t$start\t$end\t$duration\t$activity\n"
+            printf "%s\t%s\t%s\t%s\t%s\n" "$day" "$start" "$end" \
+                                          "$duration" "$activity"
         done > "$TMPDIR/weeks/$week/$day"
     done
 
     minutes_total=0
-    for weekdir in $TMPDIR/weeks/*; do
+    for weekdir in "$TMPDIR"/weeks/*; do
         week=$(basename "$weekdir")
         minutes_week=0
         
-        for dayfile in $weekdir/*; do
+        for dayfile in "$weekdir"/*; do
             day=$(basename "$dayfile")
             minutes_day=0
             while read -r date start end duration activity; do
@@ -152,9 +153,9 @@ review_cmd() {
     done
 
     if [ "$activities" = "true" ]; then
-        for actfile in $TMPDIR/activities/*; do
-            activity="$(basename $actfile)"
-            minutes_activity="$(cat $actfile)"
+        for actfile in "$TMPDIR"/activities/*; do
+            activity="$(basename "$actfile")"
+            minutes_activity="$(cat "$actfile")"
             duration=$(duration_fmt minutes_activity)
             percentage="$((100*minutes_activity/minutes_total))"
             printf "%s\t%3d%%\t%s\n" "$duration" "$percentage" "$activity" 
