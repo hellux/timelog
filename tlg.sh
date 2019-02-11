@@ -1,8 +1,9 @@
 #!/bin/sh
 
 die() {
+    fmt="$1"
     [ -n "$2" ]; shift
-    printf 'error: '"$1"'\n' "$@" 1>&2
+    printf 'error: '"$fmt"'\n' "$@" 1>&2
     rm -rf "$RNT_DIR"
     exit 1
 }
@@ -156,7 +157,7 @@ review_cmd() {
         $1 == "*" { $1=""; topics[substr($0,2)]="" }
         END { flush() }'
         awk -v"day=$day" -v"SEP=$SUBSEP" -v"REG=$TIME_REGEX" "$AWK_PARSE" \
-            "$dayfile" > "$TMPDIR/weeks/$week/$day"
+            "$dayfile" > "$TMPDIR/weeks/$week/$day" || die "awk failed"
     done
 
     minutes_total=0
