@@ -11,6 +11,7 @@ TIMEFMT="%H%M"
 DATE_REGEX="^([0-9]{4})-(1[0-2]|0[1-9])-(3[01]|0[1-9]|[12][0-9])$"
 TIME_REGEX="[0-2][0-9][0-5][0-9]"
 TMPDIR="$(mktemp -d)"
+SUBSEP="|"
 
 log_cmd() {
     [ -z "$1" ] && die "no directory or log specified"
@@ -121,22 +122,41 @@ review_cmd() {
         week="$(date -d"$day" +"%V")"
         mkdir -p "$TMPDIR/weeks/$week"
 
-        grep -e "^$TIME_REGEX $TIME_REGEX" "$dayfile" |\
-            sed 's/ /\t/;s/ /\t/' |\
-            while read -r start end activity; do
-                duration="$(duration "$start" "$end")"
+        AWK_PARSE='
+        function duration(start, end) {
+            starth=substr(start,1,2);
+            startm=substr(start,3,2);
+            endh=substr(end,1,2);
+            endm=substr(end,3,2);
+            return endh*60 + endm - starth*60 - startm
+        }
 
-                actfile="$TMPDIR/activities/$activity"
-                if [ -e "$actfile" ]; then
-                    current="$(cat "$actfile")"
-                    echo "$((current+duration))" > "$actfile"
-                else
-                    echo "$duration" > "$actfile"
-                fi
+        function flush() {
+            if (start != "") {
+                partstr=""
+                for (p in participants) partstr=partstr SEP p
+                partstr=substr(partstr,2)
+                topstr=""
+                for (t in topics) topstr=topstr SEP t
+                topstr=substr(topstr,2)
 
-                printf "%s\t%s\t%s\t%s\t%s\n" "$day" "$start" "$end" \
-                                              "$duration" "$activity"
-            done > "$TMPDIR/weeks/$week/$day"
+                OFS="\t"
+                FS=OFS
+                print day,start,end,duration(start, end),activity,partstr,topstr
+                OFS=" "
+                FS=OFS
+
+                start=""; end=""; activity="";
+                split("", participants); split("", topics)
+            }
+        }
+
+        $1 ~ REG && $2 ~ REG { flush(); start=$1; end=$2; activity=$3 }
+        $1 == "+" { $1=""; participants[substr($0,2)]="" }
+        $1 == "*" { $1=""; topics[substr($0,2)]="" }
+        END { flush() }'
+        awk -v"day=$day" -v"SEP=$SUBSEP" -v"REG=$TIME_REGEX" "$AWK_PARSE" \
+            "$dayfile" > "$TMPDIR/weeks/$week/$day"
     done
 
     minutes_total=0
@@ -147,15 +167,18 @@ review_cmd() {
         for dayfile in "$weekdir"/*; do
             day=$(basename "$dayfile")
             minutes_day=0
-            while read -r date start end duration activity; do
+            while read -r day start end duration activity partic topics; do
                 minutes_day=$((minutes_day+duration))
 
                 if [ "$summary" = "true" ];then
                     startstr=$(date -d"$start" +"%H:%M")
                     endstr=$(date -d"$end" +"%H:%M")
                     hours=$(echo "scale=2; $duration/60" | bc)
-                    printf "%s\t%s\t%s\t%s\t%s\n" "$date" \
-                           "$startstr" "$endstr" "$hours" "$activity"
+                    partstr=$(echo "$partic" | sed "s/$SUBSEP/, /g")
+                    topstr=$(echo "$topics" | sed "s/$SUBSEP/, /g")
+
+                    printf "%s\t%s\t%s\t%s\t%s: %s\t%s\n" "$day" "$startstr" \
+                        "$endstr" "$hours" "$activity" "$topstr" "$partstr"
                 fi
             done < "$dayfile"
             minutes_week=$((minutes_week+minutes_day))
