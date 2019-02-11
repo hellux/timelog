@@ -156,7 +156,7 @@ review_cmd() {
         $1 == "+" { $1=""; participants[substr($0,2)]="" }
         $1 == "*" { $1=""; topics[substr($0,2)]="" }
         END { flush() }'
-        awk -v"day=$day" -v"SEP=$SUBSEP" -v"REG=$TIME_REGEX" "$AWK_PARSE" \
+        awk -v"day=$day" -v"SEP=$SUBSEP" -v"REG=$TIME_REGEX" "$AWK_PARSE"\
             "$dayfile" > "$TMPDIR/weeks/$week/$day" || die "awk failed"
     done
 
