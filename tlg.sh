@@ -50,7 +50,7 @@ log_cmd() {
     if [ "$tmplog" -nt "$cmp" ]; then
         if [ -s "$tmplog" ]; then
             if cp "$tmplog" "$logfile"; then
-                if [ "$TLG_GIT" = "true" ]; then
+                if [ "$TLG_GIT" != "false" ]; then
                     git add "$logfile"
                     git commit "$logfile" -m "log time"
                 fi
