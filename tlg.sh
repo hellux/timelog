@@ -166,7 +166,6 @@ review_cmd() {
         minutes_week=0
         
         for dayfile in "$weekdir"/*; do
-            day=$(basename "$dayfile")
             minutes_day=0
             IFS=$(printf "\t")
             while read -r day start end duration activity partic topics; do
@@ -193,12 +192,14 @@ review_cmd() {
                         "$endstr" "$hours" "$activity" "$topstr" "$partstr"
                 fi
             done < "$dayfile"
-            minutes_week=$((minutes_week+minutes_day))
 
+            day=$(basename "$dayfile")
             if [ "$daily" = "true" ]; then
                 printf "%s: %s\n" "$(date -d"$day" +"%Y-%m-%d %a")" \
                                   "$(duration_fmt "$minutes_day")"
             fi
+
+            minutes_week=$((minutes_week+minutes_day))
         done
         minutes_total=$((minutes_total+minutes_week))
 
