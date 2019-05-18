@@ -168,6 +168,7 @@ review_cmd() {
         for dayfile in "$weekdir"/*; do
             day=$(basename "$dayfile")
             minutes_day=0
+            IFS=$(printf "\t")
             while read -r day start end duration activity partic topics; do
                 minutes_day=$((minutes_day+duration))
 
@@ -229,4 +230,4 @@ case "$command" in
     *) die 'invalid command -- %s\n\n%s' "$command" "$USAGE";;
 esac
 
-#rm -rf "$TMPDIR"
+rm -rf "$TMPDIR"
