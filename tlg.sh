@@ -183,6 +183,7 @@ review_cmd() {
 
         for dayfile in "$weekdir"/*; do
             minutes_day=0
+            IFS=$(printf "\t")
             while read -r day start end duration activity partic topics; do
                 minutes_day=$((minutes_day+duration))
 
