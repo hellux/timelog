@@ -15,15 +15,21 @@ TMPDIR="$(mktemp -d)"
 SUBSEP="|"
 
 log_cmd() {
-    [ -z "$1" ] && die "no directory or log specified"
-    if [ -d "$1" ]; then
+    if [ -z "$1" ]; then
+        if [ -n "$TIMELOG_DIR" ]; then
+            logfile="$TIMELOG_DIR/$(date +"%Y-%m-%d")"
+        else
+            die "no directory or log specified"
+        fi
+    elif [ -d "$1" ]; then
         logfile="$1/$(date +"%Y-%m-%d")"
-    elif echo "$(basename $1)" | grep -qE "$DATE_REGEX"; then
+        shift
+    elif basename "$1" | grep -qE "$DATE_REGEX"; then
         logfile="$1"
+        shift
     else
         die "invalid dir or log -- %s" "$1"
     fi
-    shift
     duration=${1:-120}
 
     # create temporary file
@@ -51,8 +57,10 @@ log_cmd() {
         if [ -s "$tmplog" ]; then
             if cp "$tmplog" "$logfile"; then
                 if [ "$TLG_GIT" != "false" ]; then
+                    cd "$(dirname "$logfile")" || die "cd failed"
                     git add "$logfile"
                     git commit "$logfile" -m "log time"
+                    cd - > /dev/null || "cd back failed"
                 fi
                 echo "log saved to $logfile"
             else
@@ -69,9 +77,14 @@ log_cmd() {
 }
 
 duration_fmt() {
-    hourstr="$(($1 / 60))h"
-    if [ $(($1 % 60)) -gt 0 ]
-    then minstr="$(($1 % 60))m"
+    minutes=$1
+    if [ "$minutes" -lt 0 ]; then
+        minutes=$((-minutes))
+        printf "-"
+    fi
+    hourstr="$((minutes / 60))h"
+    if [ $((minutes % 60)) -gt 0 ]
+    then minstr="$((minutes % 60))m"
     else minstr=""
     fi
     printf "%s %s" "$hourstr" "$minstr"
@@ -103,9 +116,9 @@ review_cmd() {
     done
     shift $((OPTIND-1))
 
-    [ -z "$1" ] && die "no directory or log files specified"
-
-    if [ -z "$2" -a -d "$1" ];
+    if [ -z "$1" ];
+    then day_files="$TIMELOG_DIR/*"
+    elif [ -z "$2" ] && [ -d "$1" ]
     then day_files="$1/*"
     else day_files="$*"
     fi
@@ -115,10 +128,13 @@ review_cmd() {
     rm -rf "$TMPDIR"/weeks/*
 
     # format to entries per day per week, and per activity
+    minutes_should=0
     for dayfile in $day_files; do
+        minutes_should=$((minutes_should + 8*60))
+
         day="$(basename "$dayfile")"
         [ -r "$dayfile" ] || die "cannot open log file -- %s" "$dayfile"
-        echo $day | grep -qE "$DATE_REGEX" \
+        echo "$day" | grep -qE "$DATE_REGEX" \
             || die "invalid filename, must be of type YYYY-MM-DD -- %s" "$day"
         week="$(date -d"$day" +"%V")"
         mkdir -p "$TMPDIR/weeks/$week"
@@ -164,7 +180,7 @@ review_cmd() {
     for weekdir in "$TMPDIR"/weeks/*; do
         week=$(basename "$weekdir")
         minutes_week=0
-        
+
         for dayfile in "$weekdir"/*; do
             minutes_day=0
             while read -r day start end duration activity partic topics; do
@@ -213,11 +229,13 @@ review_cmd() {
             minutes_activity="$(cat "$actfile")"
             duration=$(duration_fmt minutes_activity)
             percentage="$((100*minutes_activity/minutes_total))"
-            printf "%s\t%3d%%\t%s\n" "$duration" "$percentage" "$activity" 
+            printf "%s\t%3d%%\t%s\n" "$duration" "$percentage" "$activity"
         done | sort -nr
     fi
 
-    printf "Total: %s\n" "$(duration_fmt "$minutes_total")"
+    diff=$(duration_fmt $((minutes_total-minutes_should)) | sed 's/^[0-9]/+&/')
+    printf "Total: %s (%s)\n" "$(duration_fmt "$minutes_total")" "$diff"
+
 }
 
 command="$1"
@@ -230,4 +248,4 @@ case "$command" in
     *) die 'invalid command -- %s\n\n%s' "$command" "$USAGE";;
 esac
 
-#rm -rf "$TMPDIR"
+rm -rf "$TMPDIR"
