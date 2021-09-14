@@ -8,11 +8,18 @@ die() {
     exit 1
 }
 
-TIMEFMT="%H%M"
+TIMELOG_FULLTIME=${TIMELOG_FULLTIME:-$((8*60))}
+
 DATE_REGEX="^([0-9]{4})-(1[0-2]|0[1-9])-(3[01]|0[1-9]|[12][0-9])$"
-TIME_REGEX="[0-2][0-9][0-5][0-9]"
 TMPDIR="$(mktemp -d)"
-SUBSEP="|"
+
+NRMCOL='\033[0m'
+BLDCOL='\033[0;1m'
+LO2COL='\033[31;1m'
+LO1COL='\033[33;1m'
+MEDCOL='\033[32;1m'
+HI1COL='\033[35;1m'
+HI2COL='\033[34;1m'
 
 log_cmd() {
     if [ -z "$1" ]; then
@@ -30,20 +37,12 @@ log_cmd() {
     else
         die "invalid dir or log -- %s" "$1"
     fi
-    duration=${1:-120}
 
     # create temporary file
     tmplog="$TMPDIR/log"
     cmp="$TMPDIR/cmp"
     if [ -r "$logfile" ]; then
-        cat "$logfile" > "$tmplog"
-    else
-        unix=$(date +"%s")
-        halfhours=$(((unix+60*15) / (60*30)))
-        start=$(date -d "@$(((halfhours*30-duration)*60))" +"$TIMEFMT")
-        end=$(date -d "@$((halfhours*30*60))" +"$TIMEFMT")
-
-        echo "$start $end" > "$tmplog"
+        cp "$logfile" "$tmplog"
     fi
     EPOCH="1970-01-01T00:00:00"
     touch -d "$EPOCH" "$tmplog"
@@ -56,12 +55,12 @@ log_cmd() {
     if [ "$tmplog" -nt "$cmp" ]; then
         if [ -s "$tmplog" ]; then
             if cp "$tmplog" "$logfile"; then
-                if [ "$TLG_GIT" != "false" ]; then
-                    cd "$(dirname "$logfile")" || die "cd failed"
+                cd "$(dirname "$logfile")" || die "cd failed"
+                if git status; then
                     git add "$logfile"
                     git commit "$logfile" -m "log time"
-                    cd - > /dev/null || "cd back failed"
                 fi
+                cd - > /dev/null || "cd back failed"
                 echo "log saved to $logfile"
             else
                 echo "failed to save log"
@@ -76,18 +75,14 @@ log_cmd() {
     fi
 }
 
-duration_fmt() {
-    minutes=$1
-    if [ "$minutes" -lt 0 ]; then
-        minutes=$((-minutes))
-        printf "-"
-    fi
-    hourstr="$((minutes / 60))h"
-    if [ $((minutes % 60)) -gt 0 ]
-    then minstr="$((minutes % 60))m"
-    else minstr=""
-    fi
-    printf "%s %s" "$hourstr" "$minstr"
+year() {
+    date -d "$*" +"%Y"
+}
+month() {
+    date -d "$*" +"%Y-%m"
+}
+week() {
+    date -d "$*" +"%G-W%V"
 }
 
 duration() {
@@ -99,18 +94,89 @@ duration() {
     echo "$((endh*60 + endm - starth*60 - startm))"
 }
 
+duration_fmt() {
+    dur=$1
+    if [ "$dur" -lt 0 ]; then
+        dur=$((-dur))
+        printf "-"
+    fi
+    if [ "$dur" -gt 60 ];
+    then hourstr="$((dur / 60))h"
+    else hourstr=""
+    fi
+    if [ $((dur % 60)) -gt 0 ]
+    then minstr="$((dur % 60))m"
+    else minstr=""
+    fi
+
+    if [ -z "$minstr" ] && [ -z "$hourstr" ]; then
+        printf "0m"
+    elif [ -z "$minstr" ]; then
+        printf "%s" "$hourstr"
+    elif [ -z "$hourstr" ]; then
+        printf "%s" "$minstr"
+    else
+        printf "%s %s" "$hourstr" "$minstr"
+    fi
+}
+
+aggregate_fmt() {
+    inputfile=$1
+    header=$2
+
+    dur_total=0
+    dur_full=0
+    current_day=""
+    while read -r day start end _; do
+        dur_total=$((dur_total+$(duration "$start" "$end")))
+        if [ "$current_day" != "$day" ]; then
+            dur_full=$((dur_full+fulltime))
+            current_day="$day"
+        fi
+    done < "$inputfile"
+
+    if [ -n "$fulltime" ]; then
+        diff=$((dur_total-dur_full))
+        ratio=$((100*diff/dur_full)); ratio=${ratio#-}
+        col=$MEDCOL
+        if [ "$diff" -gt 0 ]; then
+            diffsign="+"
+            if [ "$ratio" -ge 10 ]; then
+                col=$LO2COL
+            elif [ "$ratio" -ge 5 ]; then
+                col=$LO1COL
+            fi
+        else
+            diffsign=""
+            if [ "$ratio" -ge 10 ]; then
+                col=$HI2COL
+            elif [ "$ratio" -ge 5 ]; then
+                col=$HI1COL
+            fi
+        fi
+        ftstr=" $diffsign$(duration_fmt "$diff")"
+    else
+        ftstr=""
+    fi
+
+    printf "$BLDCOL%s $NRMCOL%s$col%s$NRMCOL\n" \
+           "$header" "$(duration_fmt "$dur_total")" "$ftstr"
+}
+
 review_cmd() {
-    daily="false"
-    weekly="false"
-    summary="false"
-    activities="false"
+    daily=""
+    weekly=""
+    monthly=""
+    yearly=""
+    fulltime=""
     OPTIND=1
-    while getopts dwas flag; do
+    while getopts dwmyf flag; do
         case $flag in
         d) daily="true";;
         w) weekly="true";;
-        s) summary="true";;
-        a) activities="true";;
+        m) monthly="true";;
+        y) yearly="true";;
+        f) fulltime="$TIMELOG_FULLTIME";;
         [?]) die "invalid flag -- %s" "$OPTARG"
         esac
     done
@@ -123,120 +189,54 @@ review_cmd() {
     else day_files="$*"
     fi
 
-    mkdir -p "$TMPDIR/weeks"
-    mkdir -p "$TMPDIR/activities"
-    rm -rf "$TMPDIR"/weeks/*
+    mkdir -p "$TMPDIR/d"
+    mkdir -p "$TMPDIR/w"
+    mkdir -p "$TMPDIR/m"
+    mkdir -p "$TMPDIR/y"
 
-    # format to entries per day per week, and per activity
-    minutes_should=0
     for dayfile in $day_files; do
-        minutes_should=$((minutes_should + 8*60))
-
         day="$(basename "$dayfile")"
-        [ -r "$dayfile" ] || die "cannot open log file -- %s" "$dayfile"
-        echo "$day" | grep -qE "$DATE_REGEX" \
+        echo "$day" | grep -qE "^(.*/)?$DATE_REGEX$" \
             || die "invalid filename, must be of type YYYY-MM-DD -- %s" "$day"
-        week="$(date -d"$day" +"%V")"
-        mkdir -p "$TMPDIR/weeks/$week"
+        [ -r "$dayfile" ] || die "cannot open log file -- %s" "$dayfile"
 
-        AWK_PARSE='
-        function duration(start, end) {
-            starth=substr(start,1,2);
-            startm=substr(start,3,2);
-            endh=substr(end,1,2);
-            endm=substr(end,3,2);
-            return endh*60 + endm - starth*60 - startm
-        }
+        # rm comments, rm empty lines, prepend day
+        sed 's:#.*$::g' "$dayfile" | awk 'NF' | sed "s/^/$day /" > "$TMPDIR/d/$day"
 
-        function flush() {
-            if (start != "") {
-                partstr=""
-                for (p in participants) partstr=partstr SEP p
-                partstr=substr(partstr,2)
-                topstr=""
-                for (t in topics) topstr=topstr SEP t
-                topstr=substr(topstr,2)
-
-                OFS="\t"
-                FS=OFS
-                print day,start,end,duration(start, end),activity,partstr,topstr
-                OFS=" "
-                FS=OFS
-
-                start=""; end=""; activity="";
-                split("", participants); split("", topics)
-            }
-        }
-
-        $1 ~ REG && $2 ~ REG { flush(); start=$1; end=$2; activity=$3 }
-        $1 == "+" { $1=""; participants[substr($0,2)]="" }
-        $1 == "*" { $1=""; topics[substr($0,2)]="" }
-        END { flush() }'
-        awk -v"day=$day" -v"SEP=$SUBSEP" -v"REG=$TIME_REGEX" "$AWK_PARSE"\
-            "$dayfile" > "$TMPDIR/weeks/$week/$day" || die "awk failed"
+        # add to aggregated periods
+        [ -n "$weekly"  ] && cat "$TMPDIR/d/$day" >> "$TMPDIR/w/$(week "$day")"
+        [ -n "$monthly" ] && cat "$TMPDIR/d/$day" >> "$TMPDIR/m/$(month "$day")"
+        [ -n "$yearly"  ] && cat "$TMPDIR/d/$day" >> "$TMPDIR/y/$(year "$day")"
     done
 
-    minutes_total=0
-    for weekdir in "$TMPDIR"/weeks/*; do
-        week=$(basename "$weekdir")
-        minutes_week=0
+    current_year=""
+    current_month=""
+    current_week=""
+    for dayfile in "$TMPDIR"/d/*; do
+        day=$(basename "$dayfile")
 
-        for dayfile in "$weekdir"/*; do
-            minutes_day=0
-            IFS=$(printf "\t")
-            while read -r day start end duration activity partic topics; do
-                minutes_day=$((minutes_day+duration))
+        year=$(year "$day")
+        if [ "$yearly" = "true" ] && [ "$current_year" != "$year" ]; then
+            current_year="$year"
+            aggregate_fmt "$TMPDIR/y/$year" "$year"
+        fi
 
-                if [ "$activities" = "true" ]; then
-                    actfile="$TMPDIR/activities/$activity"
-                    if [ -e "$actfile" ]; then
-                        current=$(cat "$actfile")
-                        echo $((current+duration)) > "$actfile"
-                    else
-                        echo "$duration" > "$actfile"
-                    fi
-                fi
+        month=$(month "$day")
+        if [ "$monthly" = "true" ] && [ "$current_month" != "$month" ]; then
+            current_month="$month"
+            aggregate_fmt "$TMPDIR/m/$month" "$(date -d "$day" +"%b %Y")"
+        fi
 
-                if [ "$summary" = "true" ]; then
-                    startstr=$(date -d"$start" +"%H:%M")
-                    endstr=$(date -d"$end" +"%H:%M")
-                    hours=$(echo "scale=2; $duration/60" | bc)
-                    partstr=$(echo "$partic" | sed "s/$SUBSEP/, /g")
-                    topstr=$(echo "$topics" | sed "s/$SUBSEP/, /g")
+        week=$(week "$day")
+        if [ "$weekly" = "true" ] && [ "$current_week" != "$week" ]; then
+            current_week="$week"
+            aggregate_fmt "$TMPDIR/w/$week" "$(date -d "$day" +"%G-W%V")"
+        fi
 
-                    printf "%s\t%s\t%s\t%s\t%s: %s\t%s\n" "$day" "$startstr" \
-                        "$endstr" "$hours" "$activity" "$topstr" "$partstr"
-                fi
-            done < "$dayfile"
-
-            day=$(basename "$dayfile")
-            if [ "$daily" = "true" ]; then
-                printf "%s: %s\n" "$(date -d"$day" +"%Y-%m-%d %a")" \
-                                  "$(duration_fmt "$minutes_day")"
-            fi
-
-            minutes_week=$((minutes_week+minutes_day))
-        done
-        minutes_total=$((minutes_total+minutes_week))
-
-        if [ "$weekly" = "true" ]; then
-            printf "W%s: %s\n" "$week" "$(duration_fmt "$minutes_week")"
+        if [ "$daily" = "true" ]; then
+            aggregate_fmt "$dayfile" "$(date -d "$day" +"%a %e %b")"
         fi
     done
-
-    if [ "$activities" = "true" ]; then
-        for actfile in "$TMPDIR"/activities/*; do
-            activity="$(basename "$actfile")"
-            minutes_activity="$(cat "$actfile")"
-            duration=$(duration_fmt minutes_activity)
-            percentage="$((100*minutes_activity/minutes_total))"
-            printf "%s\t%3d%%\t%s\n" "$duration" "$percentage" "$activity"
-        done | sort -nr
-    fi
-
-    diff=$(duration_fmt $((minutes_total-minutes_should)) | sed 's/^[0-9]/+&/')
-    printf "Total: %s (%s)\n" "$(duration_fmt "$minutes_total")" "$diff"
-
 }
 
 command="$1"
